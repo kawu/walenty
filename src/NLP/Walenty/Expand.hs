@@ -6,21 +6,28 @@
 
 module NLP.Walenty.Expand
 ( Expansion (..)
+, ExpansionMap
 , readExpansions
 , parseExpansions
 ) where
 
 
-import           Control.Monad (void)
+import           Control.Monad        (void)
 
-import           Data.Text     (Text)
-import qualified Data.Text     as T
--- import qualified Data.Text.IO  as T
+import           Data.Text            (Text)
+-- import qualified Data.Text     as T
+import qualified Data.Text.IO         as T
 
--- import           Data.Attoparsec.Text (Parser, string, (<?>))
--- import qualified Data.Attoparsec.Text as A
-import           Text.Parsec   (string, (<?>))
-import qualified Text.Parsec   as A
+import qualified Data.Map.Strict      as M
+
+import           Data.Attoparsec.Text (Parser, string, (<?>))
+import qualified Data.Attoparsec.Text as A
+-- import           Text.Parsec   (string, (<?>))
+-- import qualified Text.Parsec   as A
+
+
+-- | Expansion map.
+type ExpansionMap = M.Map Text [Text]
 
 
 -- | Phrase type expansion.
@@ -34,19 +41,20 @@ data Expansion = Expansion
 
 
 -- | Parser type.
-type Parser = A.Parsec String ()
+-- type Parser = A.Parsec String ()
 
 
 -- | Read expansion file.
-readExpansions :: FilePath -> IO [Expansion]
-readExpansions path = parseExpansions path <$> readFile path
+readExpansions :: FilePath -> IO ExpansionMap
+readExpansions path = parseExpansions <$> T.readFile path
 
 
 -- | Parse expansion file.
-parseExpansions :: FilePath -> String -> [Expansion]
-parseExpansions path =
-  check . A.parse (expansionsP <* endOfInput) path
+parseExpansions :: Text -> ExpansionMap
+parseExpansions =
+  M.fromList . map mkPair . check . A.parseOnly (expansionsP <* A.endOfInput)
   where
+    mkPair x = (from x, to x)
     check (Right x) = x
     check (Left e) = error (show e)
 
@@ -61,7 +69,7 @@ expansionsP = do
 
 expansionP :: Parser Expansion
 expansionP = do
-  typ <- takeTill (=='-')
+  typ <- A.takeTill (=='-')
   void $ string "-->"
   void $ A.endOfLine
   eto <- toP
@@ -72,7 +80,7 @@ expansionP = do
 toP :: Parser [Text]
 toP = do
   void $ string "    "
-  x <- takeTill (=='\t')
+  x <- A.takeTill (=='\t')
   A.skipMany1 A.space
   void $ certP
   void $ A.endOfLine
@@ -84,7 +92,7 @@ toP = do
 certP :: Parser Text
 certP = do
   void $ A.char '['
-  cert <- takeTill (==']')
+  cert <- A.takeTill (==']')
   void $ A.char ']'
   return cert
   <?> "certP"
@@ -95,11 +103,11 @@ certP = do
 -------------------------------------------------------------
 
 
--- | End of input parser.
-endOfInput :: Parser ()
-endOfInput = A.eof
+-- -- | End of input parser.
+-- endOfInput :: Parser ()
+-- endOfInput = A.A.eof
 
 
--- | Take till parser.
-takeTill :: (Char -> Bool) -> Parser Text
-takeTill p = T.pack <$> A.manyTill A.anyChar (A.lookAhead $ A.satisfy p)
+-- -- | Take till parser.
+-- takeTill :: (Char -> Bool) -> Parser Text
+-- takeTill p = T.pack <$> A.manyTill A.anyChar (A.lookAhead $ A.satisfy p)
