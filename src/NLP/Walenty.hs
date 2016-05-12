@@ -18,18 +18,20 @@ module NLP.Walenty
 ) where
 
 
-import           Control.Applicative  ((<|>))
-import           Control.Monad        (void)
-import qualified Data.Char            as C
+import           Control.Applicative ((<|>))
+import           Control.Monad       (void)
+import qualified Data.Char           as C
 -- import           Data.Foldable        (asum)
 -- import           Data.Maybe           (mapMaybe)
-import           Data.Text            (Text)
-import qualified Data.Text            as T
-import qualified Data.Text.Lazy       as L
-import qualified Data.Text.Lazy.IO    as L
+import           Data.Text           (Text)
+import qualified Data.Text           as T
+-- import qualified Data.Text.Lazy       as L
+-- import qualified Data.Text.Lazy.IO    as L
 
-import           Data.Attoparsec.Text (Parser, string, (<?>))
-import qualified Data.Attoparsec.Text as A
+-- import           Data.Attoparsec.Text (Parser, string, (<?>))
+-- import qualified Data.Attoparsec.Text as A
+import           Text.Parsec         (string, (<?>))
+import qualified Text.Parsec         as A
 
 
 -------------------------------------------------------------
@@ -246,22 +248,26 @@ data Attribute
 -------------------------------------------------------------
 
 
+-- | Parser type.
+type Parser = A.Parsec String ()
+
+
 -- | Read Walenty file (verb entries only).
 readWalenty :: FilePath -> IO [Either Verb Comment]
-readWalenty path = parseWalenty <$> L.readFile path
+readWalenty path = parseWalenty <$> readFile path
 
 
 -- | Parse Walenty file (verb entries only).
-parseWalenty :: L.Text -> [Either Verb Comment]
+parseWalenty :: String -> [Either Verb Comment]
 parseWalenty
-  = map (takeRight . parseLine . L.toStrict)
-  . filter (not . L.null)
-  . map (L.dropAround $ \c -> C.isSpace c || not (C.isPrint c))
-  . L.lines
+  = map (takeRight . parseLine)
+  . filter (not . null)
+  . map (dropAround $ \c -> C.isSpace c || not (C.isPrint c))
+  . lines
   where
-    parseLine = A.parseOnly $ lineP -- <* A.endOfInput
+    parseLine line = A.parse (lineP <* endOfInput) line line
     takeRight (Right x) = x
-    takeRight (Left e) = error e
+    takeRight (Left e) = error (show e)
 
 
 -- | A line parser (either a verb entry or a comment).
@@ -273,7 +279,7 @@ lineP
 
 
 commentP :: Parser Comment
-commentP = A.char '%' *> (T.strip <$> A.takeText)
+commentP = A.char '%' *> (T.strip <$> takeText)
   <?> "commentP"
 -- commentP = A.takeText
 
@@ -291,13 +297,13 @@ verbP = Verb
 
 
 breakP :: Parser ()
-breakP = A.char ':' *> A.skipSpace
+breakP = A.char ':' *> skipSpace
   <?> "breakP"
 
 
 -- | Read the entire field, whatever's inside.
 fieldP :: Parser Text
-fieldP = A.takeTill (==':')
+fieldP = takeTill (==':')
   <?> "fieldP"
 
 
@@ -321,7 +327,7 @@ aspectP = A.choice
 
 
 frameP :: Parser Frame
-frameP = argumentP `A.sepBy1'` A.char '+'
+frameP = argumentP `A.sepBy1` A.char '+'
   <?> "frameP"
 
 
@@ -351,7 +357,7 @@ controlP = A.choice
 
 phrasesP :: Parser [Phrase]
 phrasesP =
-  let p = phraseP `A.sepBy1'` A.char ';'
+  let p = phraseP `A.sepBy1` A.char ';'
   in  between '{' '}' p
   <?> "phrasesP"
 
@@ -420,7 +426,7 @@ cpP = plain <|> lexicalized
         cmp <- between '(' ')' compP
         neg <- comma *> maybe_ negationP
         lks <- comma *> lexicalHeadP
-        unk <- comma *> A.takeTill (==',')
+        unk <- comma *> takeTill (==',')
         atr <- comma *> attributeP
         return $ CP cmp neg (Just lks) (Just unk) atr
       <?> "lexicalized CP"
@@ -444,7 +450,7 @@ ncpP = plain <|> lexicalized
           return (cas, cmp)
         neg <- comma *> maybe_ negationP
         lks <- comma *> lexicalHeadP
-        unk <- comma *> A.takeTill (==',')
+        unk <- comma *> takeTill (==',')
         atr <- comma *> attributeP
         return $ NCP cmp cas neg (Just lks) (Just unk) atr
       <?> "lexicalized NCP"
@@ -467,7 +473,7 @@ prepNcP = plain <|> lexicalized
         pcp <- plain
         neg <- comma *> maybe_ negationP
         lks <- comma *> lexicalHeadP
-        unk <- comma *> A.takeTill (==',')
+        unk <- comma *> takeTill (==',')
         atr <- comma *> attributeP
         return pcp
           { negation = neg
@@ -492,7 +498,7 @@ attributeP =
         fmap mkAttr
           . A.option []
           $ between '(' ')' frameP
-      <?> T.unpack atrName
+      <?> atrName
 
 
 caseP :: Parser Case
@@ -524,30 +530,30 @@ negationP = A.choice
 -- | A parser for lexical (semantic) heads in lexical specifications.
 lexicalHeadP :: Parser Text
 lexicalHeadP = between '\'' '\'' $
-  A.takeTill (=='\'')
+  takeTill (=='\'')
 
 
 -- | A parser which should handle any kind of phrase
--- (but it doesn't really).
+-- (but it doesn't really...).
 otherP :: Parser Phrase
-otherP = Other <$> A.takeTill (`elem` [';', '}'])
+otherP = Other <$> takeTill (`elem` [';', '}'])
   <?> "otherP"
 
 
 -- | Complementizer (type?)
 compP :: Parser Text
-compP = A.takeTill (==')')
+compP = takeTill (==')')
   <?> "compP"
 
 
 -- | Preposition (type?)
 prepP :: Parser Text
-prepP = A.takeTill (`elem` [',', ')'])
+prepP = takeTill (`elem` [',', ')'])
   <?> "prepP"
 
 
 -------------------------------------------------------------
--- Utils
+-- Parsing utils
 -------------------------------------------------------------
 
 
@@ -568,3 +574,40 @@ maybe_ p = A.choice
   [ Nothing <$ A.char '_'
   , Just <$> p ]
   <?> "maybe_"
+
+
+
+-------------------------------------------------------------
+-- Parsing compatibility layer
+-------------------------------------------------------------
+
+
+-- | End of input parser.
+endOfInput :: Parser ()
+endOfInput = A.eof
+
+
+-- | Take till parser.
+takeTill :: (Char -> Bool) -> Parser Text
+takeTill p = T.pack <$> A.manyTill A.anyChar (A.lookAhead $ A.satisfy p)
+
+
+-- | Take the remaining text.
+takeText :: Parser Text
+takeText = takeTill (const False)
+
+
+-- | Skipe space.
+skipSpace :: Parser ()
+skipSpace = () <$ A.space
+
+
+
+-------------------------------------------------------------
+-- General utils
+-------------------------------------------------------------
+
+
+dropAround :: (Char -> Bool) -> String -> String
+dropAround p = f . f
+   where f = reverse . dropWhile p
