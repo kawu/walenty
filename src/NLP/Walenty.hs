@@ -9,9 +9,9 @@ module NLP.Walenty
 , CertLevel (..)
 , Aspect (..)
 , Frame
-, Item
-, Function
-, Argument
+, Argument (..)
+, Function (..)
+, Phrase (..)
 
 , readWalenty
 , parseWalenty
@@ -21,8 +21,8 @@ module NLP.Walenty
 import           Control.Applicative  ((<|>))
 import           Control.Monad        (void)
 import qualified Data.Char            as C
-import           Data.Foldable        (asum)
-import           Data.Maybe           (mapMaybe)
+-- import           Data.Foldable        (asum)
+-- import           Data.Maybe           (mapMaybe)
 import           Data.Text            (Text)
 import qualified Data.Text            as T
 import qualified Data.Text.Lazy       as L
@@ -84,15 +84,15 @@ type Comment = Text
 
 
 -- | A valency frame of the verb.
-type Frame = [Item]
+type Frame = [Argument]
 
 
 -- | An item of the frame.
-data Item = Item
-  { function :: Maybe Function
-  , control  :: Maybe Control
-  , argsAlt  :: [Either Lex Argument]
-    -- ^ A list of alternative arguments which can
+data Argument = Argument
+  { function  :: Maybe Function
+  , control   :: Maybe Control
+  , phraseAlt :: [Phrase]
+    -- ^ A list of phrase types which can
     -- occur on the corresponding frame position
   }
   deriving (Show, Eq, Ord)
@@ -113,32 +113,49 @@ data Control
   deriving (Show, Eq, Ord)
 
 
--- | An argument of the frame.
-data Arg
+-- | An phrase type occuring on a specific position of the frame.
+data Phrase
   = NP
-    { gcase :: Case
+    { caseG       :: Case
       -- ^ Grammatical case
+    , number      :: Maybe Number
+      -- ^ Number (if specified)
+    , lexicalHead :: Maybe Text
+      -- ^ Lexical (semantic) head (if specified)
+    , dependents  :: Attribute
+      -- ^ Dependents (if specified)
     }
     -- ^ Noun phrase
   | PrepNP
-    { prep  :: Text
+    { preposition :: Text
       -- ^ Preposition
-    , gcase :: Case
+    , caseG       :: Case
       -- ^ Grammatical case
+    , number      :: Maybe Number
+      -- ^ Number (if specified)
+    , lexicalHead :: Maybe Text
+      -- ^ Lexical head (if specified)
+    , dependents  :: Attribute
+      -- ^ Dependents (if specified)
     }
     -- ^ Prepositional phrase
+  | CP
+    { complementizer :: Text
+      -- ^ complementizer type (e.g., 'że', 'żeby', 'int')
+      -- TODO: to be represented with a type?
+    , negation       :: Maybe Negation
+      -- ^ Number (if specified)
+    , lexicalHead    :: Maybe Text
+      -- ^ Lexical head (if specified)
+    , cpUnknown      :: Maybe Text
+      -- ^ "się"?
+    , dependents     :: Attribute
+      -- ^ Dependents (if specified)
+    }
+    -- ^ Bare complementiser clause
   | Other Text
     -- ^ All the other cases, provisionally
   deriving (Show, Eq, Ord)
-
-
--- | A lexicalized argument of the frame.
-data Lex = Lex
-  { lexArg :: Argument
-    -- ^ The underlying, lexicalized argument
-  , lexNum :: Number
-    -- ^ The grammatical number
-  }
 
 
 -- | Grammatical case.  Note that /vocative/ case does not
@@ -158,9 +175,37 @@ data Case
   deriving (Show, Eq, Ord)
 
 
+-- | Grammatical number.
 data Number
   = Singular
   | Plural
+  deriving (Show, Eq, Ord)
+
+
+-- | Negation.
+data Negation
+  = Neg
+  | Aff
+  deriving (Show, Eq, Ord)
+
+
+-- | Attribute is used to specify dependents of the given phrase.
+--
+-- TODO: I've checked that dependents can be specified for their
+-- function; can they be specified for the control as well?
+-- (I didn't find any example).
+data Attribute
+  = NAtr
+    -- ^ No dependents allowed
+  | Atr Frame
+    -- ^ Optional dependent arguments; if none is specified,
+    -- any argument is allowed.
+  | Atr1 Frame
+    -- ^ Like `Atr`, but at most one dependent
+  | RAtr Frame
+    -- ^ Required attribute
+  | RAtr1 Frame
+    -- ^ Like `RAtr`, but at most one dependent
   deriving (Show, Eq, Ord)
 
 
@@ -182,7 +227,7 @@ parseWalenty
   . map (L.dropAround $ \c -> C.isSpace c || not (C.isPrint c))
   . L.lines
   where
-    parseLine = A.parseOnly $ lineP <* A.endOfInput
+    parseLine = A.parseOnly $ lineP -- <* A.endOfInput
     takeRight (Right x) = x
     takeRight (Left e) = error e
 
@@ -244,18 +289,18 @@ aspectP = A.choice
 
 
 frameP :: Parser Frame
-frameP = itemP `A.sepBy1'` A.char '+'
+frameP = argumentP `A.sepBy1'` A.char '+'
   <?> "frameP"
 
 
-itemP :: Parser Item
-itemP = Item
+argumentP :: Parser Argument
+argumentP = Argument
   <$> A.option Nothing (Just <$> functionP)
-  <*> A.option Nothing (Just <$> (comma *> controlP))
-  <*> argumentsP
-  <?> "itemP"
+  <*> A.option Nothing (Just <$> (spaceComma *> controlP))
+  <*> phrasesP
+  <?> "argumentP"
   where
-    comma = void $ A.option ' ' (A.char ',')
+    spaceComma = void $ A.option ' ' (A.char ',')
 
 
 functionP :: Parser Function
@@ -272,40 +317,99 @@ controlP = A.choice
   <?> "controlP"
 
 
-argumentsP :: Parser [Argument]
-argumentsP = do
-  A.char '{'
-  args <- argumentP `A.sepBy1'` A.char ';'
-  A.char '}'
-  return args
-  <?> "argumentsP"
+phrasesP :: Parser [Phrase]
+phrasesP =
+  let p = phraseP `A.sepBy1'` A.char ';'
+  in  between '{' '}' p
+  <?> "phrasesP"
 
 
-argumentP :: Parser Argument
-argumentP = A.choice
-  [npP, prepNpP, otherP]
-  <?> "argumentP"
+phraseP :: Parser Phrase
+phraseP = A.choice
+  [ npP, prepNpP, cpP ]
+  <|> otherP
+  <?> "phraseP"
 
 
-otherP :: Parser Argument
-otherP = Other <$> A.takeTill (`elem` [';', '}'])
+npP :: Parser Phrase
+npP = regNpP <|> lexNpP
+  <?> "npP"
+  where
+    regNpP = string "np" *> do
+      cas <- between '(' ')' caseP
+      return $ NP cas Nothing Nothing (Atr [])
+      <?> "regNpP"
+    lexNpP = string "lex" *> do
+      between '(' ')' $ string "np" *> do
+        cas <- between '(' ')' caseP
+        num <- comma *> maybe_ numberP
+        lks <- comma *> lexicalHeadP
+        atr <- comma *> attributeP
+        return $ NP cas num (Just lks) atr
+      <?> "lexNpP"
 
 
-npP :: Parser Argument
-npP = NP <$> do
-  string "np"
-  A.char '(' *> caseP <* A.char ')'
+prepNpP :: Parser Phrase
+prepNpP = regPrepNpP <|> lexPrepNpP
+  <?> "prepNpP"
+  where
+    regPrepNpP = string "prepnp" *> do
+      between '(' ')' $ do
+        prp <- A.takeWhile1 C.isLetter
+        cas <- A.char ',' *> caseP
+        return $ PrepNP prp cas Nothing Nothing (Atr [])
+      <?> "regPrepNpP"
+    lexPrepNpP = string "lex" *> do
+      between '(' ')' $ string "prepnp" *> do
+        (prp, cas) <- between '(' ')' $ do
+          prp <- A.takeWhile1 C.isLetter
+          cas <- comma *> caseP
+          return (prp, cas)
+        num <- comma *> maybe_ numberP
+        lks <- comma *> lexicalHeadP
+        atr <- comma *> attributeP
+        return $ PrepNP prp cas num (Just lks) atr
+      <?> "lexPrepNpP"
 
 
-prepNpP :: Parser Argument
-prepNpP = do
-  string "prepnp"
-  A.char '('
-  p <- A.takeWhile1 C.isLetter
-  A.char ','
-  c <- caseP
-  A.char ')'
-  return $ PrepNP p c
+cpP :: Parser Phrase
+cpP = plain <|> lexicalized
+  <?> "CP"
+  where
+    plain = string "cp" *> do
+      between '(' ')' $ do
+        cmp <- compP
+        return $ CP cmp Nothing Nothing Nothing (Atr [])
+      <?> "plain CP"
+    lexicalized = string "lex" *> do
+      between '(' ')' $ string "cp" *> do
+        cmp <- between '(' ')' compP
+        neg <- comma *> maybe_ negationP
+        lks <- comma *> lexicalHeadP
+        unk <- comma *> A.takeTill (==',')
+        atr <- comma *> attributeP
+        return $ CP cmp neg (Just lks) (Just unk) atr
+      <?> "lexicalized CP"
+    compP = A.takeTill (==')')
+      <?> "compP"
+
+
+attributeP :: Parser Attribute
+attributeP =
+  A.choice [natrP, atrP, atr1P, ratrP, ratr1P]
+  <?> "attributeP"
+  where
+    natrP  = NAtr <$ A.string "natr"
+    atrP   = someAtrP "atr" Atr
+    atr1P  = someAtrP "atr1" Atr1
+    ratrP  = someAtrP "ratr" RAtr
+    ratr1P = someAtrP "ratr1" RAtr1
+    someAtrP atrName mkAttr =
+      A.string atrName *> do
+        fmap mkAttr
+          . A.option []
+          $ between '(' ')' frameP
+      <?> T.unpack atrName
 
 
 caseP :: Parser Case
@@ -318,3 +422,53 @@ caseP = A.choice
   , Locative <$ string "loc"
   , Structural <$ string "str" ]
   <?> "caseP"
+
+
+numberP :: Parser Number
+numberP = A.choice
+  [ Singular <$ string "sg"
+  , Plural <$ string "pl" ]
+  <?> "numberP"
+
+
+negationP :: Parser Negation
+negationP = A.choice
+  [ Neg <$ string "neg"
+  , Aff <$ string "aff" ]
+  <?> "numberP"
+
+
+-- | A parser for lexical (semantic) heads in lexical specifications.
+lexicalHeadP :: Parser Text
+lexicalHeadP = between '\'' '\'' $
+  A.takeTill (=='\'')
+
+
+-- | A parser which should handle any kind of phrase
+-- (but it doesn't really).
+otherP :: Parser Phrase
+otherP = Other <$> A.takeTill (`elem` [';', '}'])
+
+
+-- | A parser which interprets the '_' character as `Nothing`,
+-- and otherwise uses the given parser to parser input.
+maybe_ :: Parser a -> Parser (Maybe a)
+maybe_ p = A.choice
+  [ Nothing <$ A.char '_'
+  , Just <$> p ]
+  <?> "maybe_"
+
+
+-------------------------------------------------------------
+-- Utils
+-------------------------------------------------------------
+
+
+-- | `between c1 c2 p` parses with `p` between characters `c1` and `c2`.
+between :: Char -> Char -> Parser a -> Parser a
+between c1 c2 p = A.char c1 *> p <* A.char c2
+
+
+-- | Comma parser, i.e., `A.char ','`.
+comma :: Parser ()
+comma = void $ A.char ','
