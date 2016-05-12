@@ -153,6 +153,38 @@ data Phrase
       -- ^ Dependents (if specified)
     }
     -- ^ Bare complementiser clause
+  | NCP
+    { complementizer :: Text
+      -- ^ complementizer type (e.g., 'że', 'żeby', 'int')
+    , caseG          :: Case
+      -- ^ Grammatical case
+    , negation       :: Maybe Negation
+      -- ^ Number (if specified)
+    , lexicalHead    :: Maybe Text
+      -- ^ Lexical head (if specified)
+    , cpUnknown      :: Maybe Text
+      -- ^ "się"?
+    , dependents     :: Attribute
+      -- ^ Dependents (if specified)
+    }
+    -- ^ Complementiser clauses with a correlative pronoun
+  | PrepNCP
+    { preposition    :: Text
+      -- ^ Preposition
+    , complementizer :: Text
+      -- ^ complementizer type (e.g., 'że', 'żeby', 'int')
+    , caseG          :: Case
+      -- ^ Grammatical case
+    , negation       :: Maybe Negation
+      -- ^ Number (if specified)
+    , lexicalHead    :: Maybe Text
+      -- ^ Lexical head (if specified)
+    , cpUnknown      :: Maybe Text
+      -- ^ "się"?
+    , dependents     :: Attribute
+      -- ^ Dependents (if specified)
+    }
+    -- ^ Prepositional phrase involving a complementiser clause with a correlative pronoun
   | Other Text
     -- ^ All the other cases, provisionally
   deriving (Show, Eq, Ord)
@@ -326,7 +358,7 @@ phrasesP =
 
 phraseP :: Parser Phrase
 phraseP = A.choice
-  [ npP, prepNpP, cpP ]
+  [ npP, prepNpP, cpP, ncpP, prepNcP ]
   <|> otherP
   <?> "phraseP"
 
@@ -355,14 +387,16 @@ prepNpP = regPrepNpP <|> lexPrepNpP
   where
     regPrepNpP = string "prepnp" *> do
       between '(' ')' $ do
-        prp <- A.takeWhile1 C.isLetter
+        -- prp <- A.takeWhile1 C.isLetter
+        prp <- prepP
         cas <- A.char ',' *> caseP
         return $ PrepNP prp cas Nothing Nothing (Atr [])
       <?> "regPrepNpP"
     lexPrepNpP = string "lex" *> do
       between '(' ')' $ string "prepnp" *> do
         (prp, cas) <- between '(' ')' $ do
-          prp <- A.takeWhile1 C.isLetter
+          -- prp <- A.takeWhile1 C.isLetter
+          prp <- prepP
           cas <- comma *> caseP
           return (prp, cas)
         num <- comma *> maybe_ numberP
@@ -390,8 +424,57 @@ cpP = plain <|> lexicalized
         atr <- comma *> attributeP
         return $ CP cmp neg (Just lks) (Just unk) atr
       <?> "lexicalized CP"
-    compP = A.takeTill (==')')
-      <?> "compP"
+
+
+ncpP :: Parser Phrase
+ncpP = plain <|> lexicalized
+  <?> "NCP"
+  where
+    plain = string "ncp" *> do
+      between '(' ')' $ do
+        cas <- caseP
+        cmp <- comma *> compP
+        return $ NCP cmp cas Nothing Nothing Nothing (Atr [])
+      <?> "plain NCP"
+    lexicalized = string "lex" *> do
+      between '(' ')' $ string "ncp" *> do
+        (cas, cmp) <- between '(' ')' $ do
+          cas <- caseP
+          cmp <- comma *> compP
+          return (cas, cmp)
+        neg <- comma *> maybe_ negationP
+        lks <- comma *> lexicalHeadP
+        unk <- comma *> A.takeTill (==',')
+        atr <- comma *> attributeP
+        return $ NCP cmp cas neg (Just lks) (Just unk) atr
+      <?> "lexicalized NCP"
+
+
+prepNcP :: Parser Phrase
+prepNcP = plain <|> lexicalized
+  <?> "PrepNCP"
+  where
+    plain = string "prepncp" *> do
+      between '(' ')' $ do
+        -- prp <- A.takeWhile1 C.isLetter
+        prp <- prepP
+        cas <- comma *> caseP
+        cmp <- comma *> compP
+        return $ PrepNCP prp cmp cas Nothing Nothing Nothing (Atr [])
+      <?> "plain PrepNCP"
+    lexicalized = string "lex" *> do
+      between '(' ')' $ do
+        pcp <- plain
+        neg <- comma *> maybe_ negationP
+        lks <- comma *> lexicalHeadP
+        unk <- comma *> A.takeTill (==',')
+        atr <- comma *> attributeP
+        return pcp
+          { negation = neg
+          , lexicalHead = Just lks
+          , cpUnknown = Just unk
+          , dependents = atr }
+      <?> "lexicalized PrepNCP"
 
 
 attributeP :: Parser Attribute
@@ -448,15 +531,19 @@ lexicalHeadP = between '\'' '\'' $
 -- (but it doesn't really).
 otherP :: Parser Phrase
 otherP = Other <$> A.takeTill (`elem` [';', '}'])
+  <?> "otherP"
 
 
--- | A parser which interprets the '_' character as `Nothing`,
--- and otherwise uses the given parser to parser input.
-maybe_ :: Parser a -> Parser (Maybe a)
-maybe_ p = A.choice
-  [ Nothing <$ A.char '_'
-  , Just <$> p ]
-  <?> "maybe_"
+-- | Complementizer (type?)
+compP :: Parser Text
+compP = A.takeTill (==')')
+  <?> "compP"
+
+
+-- | Preposition (type?)
+prepP :: Parser Text
+prepP = A.takeTill (`elem` [',', ')'])
+  <?> "prepP"
 
 
 -------------------------------------------------------------
@@ -472,3 +559,12 @@ between c1 c2 p = A.char c1 *> p <* A.char c2
 -- | Comma parser, i.e., `A.char ','`.
 comma :: Parser ()
 comma = void $ A.char ','
+
+
+-- | A parser which interprets the '_' character as `Nothing`,
+-- and otherwise uses the given parser to parser input.
+maybe_ :: Parser a -> Parser (Maybe a)
+maybe_ p = A.choice
+  [ Nothing <$ A.char '_'
+  , Just <$> p ]
+  <?> "maybe_"
