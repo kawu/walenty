@@ -233,12 +233,40 @@ data Phrase
     , dependents  :: Attribute
       -- ^ Dependents (if specified)
     }
-    -- ^ Prepositional adjectival phrase(?)
+  | InfP
+    { infAspect   :: Maybe Aspect
+      -- ^ Aspect
+    , negation    :: Maybe Negation
+      -- ^ Number (if specified)
+    , lexicalHead :: [Text]
+      -- ^ Lexical head (if specified)
+    , reflexive   :: Bool
+      -- ^ "się"?
+    , dependents  :: Attribute
+      -- ^ Dependents (if specified)
+    }
+    -- ^ Infinitival phrase
+  | ComparP
+    { comparConj :: Text
+      -- ^ Comparative conjunction
+    , comparFrame :: [Phrase]
+      -- ^ A list of arguments, with no functional or control specifications.
+      -- Alternatives cannot be represented.
+    }
+      -- ^ Comparative phrase
+  | Or
+    -- ^ Oratio recta, i.e. direct speech
+  | Refl
+    -- ^ Reflexive use marked through the word /się/
+  | E
+    -- ^ Implicit subject, transmitted subject when marked as controller
   | Other Text
     -- ^ All the other cases, provisionally
   deriving (Show, Eq, Ord)
 
 
+-- | Allows to construct an attribute which, instead of one of its
+-- regular values, can take the agreement value.
 data Agree a
   = Agree
   | Value a
@@ -398,7 +426,8 @@ parseWalenty expMap
     phraseP :: Parser [Phrase]
     phraseP = (fmap (:[]) . A.choice)
       [ npP, prepNpP, cpP, ncpP, prepNcP
-      , adjpP, prepNumpP, prepAdjpP ]
+      , adjpP, prepNumpP, prepAdjpP, infpP
+      , orP, reflP, eP, comparpP ]
       <|> otherP
       <?> "phraseP"
 
@@ -593,6 +622,47 @@ parseWalenty expMap
           <?> "lexicalized PrepNumP"
 
 
+    infpP :: Parser Phrase
+    infpP = plain <|> lexicalized
+      <?> "InfP"
+      where
+        plain = string "infp" *> do
+          between '(' ')' $ do
+            asp <- maybe_ aspectP
+            return $ InfP asp Nothing [] False (Atr [])
+          <?> "plain InfP"
+        lexicalized = string "lex" *> do
+          between '(' ')' $ do
+            inf <- plain
+            neg <- comma *> maybe_ negationP
+            lks <- comma *> lexicalHeadsP
+            rfl <- comma *> sieP
+            atr <- comma *> attributeP
+            return $ inf
+              { negation = neg
+              , lexicalHead = lks
+              , reflexive = rfl
+              , dependents = atr }
+          <?> "lexicalized InfP"
+
+
+    comparpP :: Parser Phrase
+    comparpP = plain <|> lexicalized
+      <?> "ComparP"
+      where
+        plain = string "compar" *> do
+          between '(' ')' $ do
+            conj <- A.takeTill (`elem` [',', ')'])
+            return $ ComparP conj []
+          <?> "plain ComparP"
+        lexicalized = string "lex" *> do
+          between '(' ')' $ do
+            comp <- plain <* comma
+            args <- phraseP `A.sepBy1'` A.char '+'
+            return $ comp {comparFrame = concat args}
+          <?> "lexicalized ComparP"
+
+
     attributeP :: Parser Attribute
     attributeP =
       A.choice [natrP, atr1P, atrP, ratr1P, ratrP]
@@ -609,6 +679,12 @@ parseWalenty expMap
               . A.option []
               $ between '(' ')' frameP
           <?> T.unpack atrName
+
+
+    orP, reflP, eP :: Parser Phrase
+    orP   = Or   <$ string "or"
+    reflP = Refl <$ string "refl"
+    eP    = E    <$ string "E"
 
 
     -- | A parser which should handle any kind of phrase
@@ -727,9 +803,10 @@ lexicalHeadsP =
   oneP <|> xorP <?> "lexicalHeadsP"
   where
     oneP = (:[]) <$> lexicalHeadP
-    xorP = string "XOR" *> do
+    xorP = (string "XOR" <|> string "OR") *> do
       between '(' ')' $ do
-        lexicalHeadP `A.sepBy1'` A.char ','
+        lexicalHeadP `A.sepBy1'`
+          (A.char ',' <|> A.char ';')
 
 
 -- | A parser for lexical (semantic) heads in lexical specifications.
@@ -750,6 +827,16 @@ prepP = A.takeTill (`elem` [',', ')'])
   <?> "prepP"
 
 
+-- | Relexive marker or nothing?
+sieP :: Parser Bool
+sieP = do
+  x <- A.takeTill (==',')
+  return $ case x of
+    "się" -> True
+    _ -> False
+
+
+-- | An attribute which can be potentially assigned the agreement value.
 agreeP :: Parser a -> Parser (Agree a)
 agreeP p = A.choice
   [ Agree <$ string "agr"
