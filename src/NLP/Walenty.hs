@@ -203,7 +203,37 @@ data Phrase
     , dependents  :: Attribute
       -- ^ Dependents (if specified)
     }
-    -- ^ Prepositional phrase
+    -- ^ Adjectival phrase
+  | PrepNumP
+    { preposition   :: Text
+      -- ^ Preposition
+    , caseG         :: Case
+      -- ^ Grammatical case
+    , lexicalNumber :: [Text]
+      -- ^ Number (if specified)
+    , lexicalHead   :: [Text]
+      -- ^ Lexical head (if specified)
+    , dependents    :: Attribute
+      -- ^ Dependents (if specified)
+    }
+    -- ^ Prepositional numeral(?) phrase
+  | PrepAdjP
+    { preposition :: Text
+      -- ^ Preposition
+    , caseG       :: Case
+      -- ^ Grammatical case
+    , adjNumber   :: Maybe (Agree Number)
+      -- ^ Number (if specified)
+    , gender      :: Maybe (Agree Gender)
+      -- ^ Gender (if specified)
+    , degree      :: Maybe Degree
+      -- ^ Degree (if specified)
+    , lexicalHead :: [Text]
+      -- ^ Lexical head (if specified)
+    , dependents  :: Attribute
+      -- ^ Dependents (if specified)
+    }
+    -- ^ Prepositional adjectival phrase(?)
   | Other Text
     -- ^ All the other cases, provisionally
   deriving (Show, Eq, Ord)
@@ -367,7 +397,8 @@ parseWalenty expMap
 
     phraseP :: Parser [Phrase]
     phraseP = (fmap (:[]) . A.choice)
-      [ npP, prepNpP, cpP, ncpP, prepNcP, adjpP ]
+      [ npP, prepNpP, cpP, ncpP, prepNcP
+      , adjpP, prepNumpP, prepAdjpP ]
       <|> otherP
       <?> "phraseP"
 
@@ -510,6 +541,56 @@ parseWalenty expMap
               , lexicalHead = lks
               , dependents = atr }
           <?> "lexicalized AdjP"
+
+
+    prepAdjpP :: Parser Phrase
+    prepAdjpP = plain <|> lexicalized
+      <?> "PrepAdjP"
+      where
+        plain = string "prepadjp" *> do
+          between '(' ')' $ do
+            prp <- prepP
+            cas <- comma *> caseP
+            return $ PrepAdjP prp cas Nothing Nothing Nothing [] (Atr [])
+          <?> "plain PrepAdjP"
+        lexicalized = string "lex" *> do
+          between '(' ')' $ do
+            pap <- plain
+            num <- comma *> agreeP numberP
+            gen <- comma *> agreeP genderP
+            deg <- comma *> degreeP
+            lks <- comma *> lexicalHeadsP
+            atr <- comma *> attributeP
+            return pap
+              { adjNumber = Just num
+              , gender = Just gen
+              , degree = Just deg
+              , lexicalHead = lks
+              , dependents = atr }
+          <?> "lexicalized PrepAdjP"
+
+
+    prepNumpP :: Parser Phrase
+    prepNumpP = plain <|> lexicalized
+      <?> "prepNumP"
+      where
+        plain = string "prepnump" *> do
+          between '(' ')' $ do
+            prp <- prepP
+            cas <- comma *> caseP
+            return $ PrepNumP prp cas [] [] (Atr [])
+          <?> "plain PrepNumP"
+        lexicalized = string "lex" *> do
+          between '(' ')' $ do
+            pnp <- plain
+            num <- comma *> lexicalHeadsP
+            lks <- comma *> lexicalHeadsP
+            atr <- comma *> attributeP
+            return $ pnp
+              { lexicalNumber = num
+              , lexicalHead = lks
+              , dependents = atr }
+          <?> "lexicalized PrepNumP"
 
 
     attributeP :: Parser Attribute
