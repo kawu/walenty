@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RecordWildCards   #-}
 
 
 -- | The module provides functions for parsing /Walenty/.
@@ -12,6 +13,8 @@ module NLP.Walenty
 , Argument (..)
 , Function (..)
 , Phrase (..)
+-- , ExpPhrase (..)
+-- , ExpMap
 
 , readWalenty
 , parseWalenty
@@ -21,7 +24,7 @@ module NLP.Walenty
 import           Control.Applicative  ((<|>))
 import           Control.Monad        (void)
 import qualified Data.Char            as C
-import qualified Data.Map.Strict      as M
+-- import qualified Data.Map.Strict      as M
 -- import           Data.Foldable        (asum)
 -- import           Data.Maybe           (mapMaybe)
 import           Data.Text            (Text)
@@ -121,7 +124,7 @@ data Phrase
   = NP
     { caseG       :: Case
       -- ^ Grammatical case
-    , number      :: Maybe Number
+    , agrNumber   :: Maybe (Agree Number)
       -- ^ Number (if specified)
     , lexicalHead :: [Text]
       -- ^ Lexical (semantic) head (if specified)
@@ -189,10 +192,27 @@ data Phrase
     }
     -- ^ Prepositional phrase involving a complementiser clause
     -- with a correlative pronoun
+  | PrepGerP
+    { preposition :: Text
+      -- ^ Preposition
+    , caseG       :: Case
+      -- ^ Grammatical case
+    , number      :: Maybe Number
+      -- ^ Number (if specified)
+    , negation    :: Maybe Negation
+      -- ^ Number (if specified)
+    , lexicalHead :: [Text]
+      -- ^ Lexical head (if specified)
+    , cpUnknown   :: Maybe Text
+      -- ^ "się"?
+    , dependents  :: Attribute
+      -- ^ Dependents (if specified)
+    }
+    -- ^ TODO
   | AdjP
     { caseG       :: Case
       -- ^ Grammatical case
-    , adjNumber   :: Maybe (Agree Number)
+    , agrNumber   :: Maybe (Agree Number)
       -- ^ Number (if specified)
     , gender      :: Maybe (Agree Gender)
       -- ^ Gender (if specified)
@@ -222,7 +242,7 @@ data Phrase
       -- ^ Preposition
     , caseG       :: Case
       -- ^ Grammatical case
-    , adjNumber   :: Maybe (Agree Number)
+    , agrNumber   :: Maybe (Agree Number)
       -- ^ Number (if specified)
     , gender      :: Maybe (Agree Gender)
       -- ^ Gender (if specified)
@@ -247,21 +267,76 @@ data Phrase
     }
     -- ^ Infinitival phrase
   | ComparP
-    { comparConj :: Text
+    { comparConj  :: Text
       -- ^ Comparative conjunction
     , comparFrame :: [Phrase]
       -- ^ A list of arguments, with no functional or control specifications.
       -- Alternatives cannot be represented.
     }
-      -- ^ Comparative phrase
+    -- ^ Comparative phrase
+  | PasP
+    { caseG       :: Case
+      -- ^ Grammatical case
+    , agrNumber   :: Maybe (Agree Number)
+      -- ^ Number (if specified)
+    , gender      :: Maybe (Agree Gender)
+      -- ^ Gender (if specified)
+    , negation    :: Maybe Negation
+      -- ^ Number (if specified)
+    , lexicalHead :: [Text]
+      -- ^ Lexical head (if specified)
+    , dependents  :: Attribute
+      -- ^ Dependents (if specified)
+    }
+    -- ^ TODO
   | Or
     -- ^ Oratio recta, i.e. direct speech
   | Refl
     -- ^ Reflexive use marked through the word /się/
   | E
     -- ^ Implicit subject, transmitted subject when marked as controller
-  | Other Text
-    -- ^ All the other cases, provisionally
+  | Nonch
+    -- ^ TODO
+    -- ^ Expandable phrase
+  | ComPrepNP
+    { complexPrep :: Text
+      -- ^ E.g. "przy okazji", "u podstaw"
+    }
+    -- ^ Complex (i.e. multi-word) preposition
+  | XP
+    { xpCat :: Text
+      -- ^ Locative, ablative, adlative, etc. (see the Walenty webpage)
+    , xpVal :: Maybe Phrase
+      -- ^ The value of the XP category can be specified
+      -- at the site of its use
+    }
+    -- ^ "Adverbial" phrases involving semantic requirements
+    -- (expressible through adverbs, prepositional phrases,
+    -- or sentential phrases)
+  | AdvP
+    { advpCat     :: Text
+      -- ^ Locative, ablative, adlative, etc. (see the Walenty webpage)
+    , degree      :: Maybe Degree
+      -- ^ Number (if specified)
+    , lexicalHead :: [Text]
+      -- ^ Lexical (semantic) head (if specified)
+    , dependents  :: Attribute
+      -- ^ Dependents (if specified)
+    }
+    -- ^ Adverbial phrase; such phrases have uncommon expansions defined
+    -- in Walenty, expansions which are not really phrases (or their
+    -- combinations) but rather lexical words.
+  | PossP
+    -- ^ TODO
+  | Fixed
+    { fixedTyp :: Phrase
+      -- ^ Type of the fixed phrase
+    , fixedLex :: Text
+      -- ^ Lexical form of the fixed phrase
+    }
+    -- ^ Fixed phrase
+--   | Other Text
+--     -- ^ All the other cases, provisionally
   deriving (Show, Eq, Ord)
 
 
@@ -368,340 +443,408 @@ parseWalenty expMap
   . filter (not . L.null)
   . map (L.dropAround $ \c -> C.isSpace c || not (C.isPrint c))
   . L.lines
-
   where
-
     parseLine = A.parseOnly $ lineP <* A.endOfInput
     takeRight (Right x) = x
     takeRight (Left e) = error e
 
 
-    -- | A line parser (either a verb entry or a comment).
-    lineP :: Parser (Either Verb Comment)
-    lineP
-       =  Right <$> commentP
-      <|> Left  <$> verbP
-      <?> "lineP"
+-- | A line parser (either a verb entry or a comment).
+lineP :: Parser (Either Verb Comment)
+lineP
+   =  Right <$> commentP
+  <|> Left  <$> verbP
+  <?> "lineP"
 
 
-    commentP :: Parser Comment
-    commentP = A.char '%' *> (T.strip <$> A.takeText)
-      <?> "commentP"
+commentP :: Parser Comment
+commentP = A.char '%' *> (T.strip <$> A.takeText)
+  <?> "commentP"
 
 
-    -- | A parser for verb lexical entries.
-    verbP :: Parser Verb
-    verbP = Verb
-      <$> (fieldP  <* breakP)
-      <*> (certP   <* breakP)
-      <*> (fieldP  <* breakP)
-      <*> (fieldP  <* breakP)
-      <*> (aspectP <* breakP)
-      <*> frameP
-      <?> "verbP"
+-- | A parser for verb lexical entries.
+verbP :: Parser Verb
+verbP = Verb
+  <$> (fieldP  <* breakP)
+  <*> (certP   <* breakP)
+  <*> (fieldP  <* breakP)
+  <*> (fieldP  <* breakP)
+  <*> (aspectP <* breakP)
+  <*> frameP
+  <?> "verbP"
 
 
-    frameP :: Parser Frame
-    frameP = argumentP `A.sepBy1'` A.char '+'
-      <?> "frameP"
+frameP :: Parser Frame
+frameP = argumentP `A.sepBy1'` A.char '+'
+  <?> "frameP"
 
 
-    argumentP :: Parser Argument
-    argumentP = Argument
-      <$> A.option Nothing (Just <$> functionP)
-      <*> A.option Nothing (Just <$> (spaceComma *> controlP))
-      <*> phrasesP
-      <?> "argumentP"
-      where
-        spaceComma = void $ A.option ' ' (A.char ',')
+argumentP :: Parser Argument
+argumentP = Argument
+  <$> A.option Nothing (Just <$> functionP)
+  <*> A.option Nothing (Just <$> (spaceComma *> controlP))
+  <*> phrasesP
+  <?> "argumentP"
+  where
+    spaceComma = void $ A.option ' ' (A.char ',')
 
 
-    phrasesP :: Parser [Phrase]
-    phrasesP = concat <$>
-      let p = phraseP `A.sepBy1'` A.char ';'
-      in  between '{' '}' p
-      <?> "phrasesP"
+phrasesP :: Parser [Phrase]
+phrasesP = -- concat <$>
+  let p = phraseP `A.sepBy1'` A.char ';'
+  in  between '{' '}' p
+  <?> "phrasesP"
 
 
-    phraseP :: Parser [Phrase]
-    phraseP = (fmap (:[]) . A.choice)
-      [ npP, prepNpP, cpP, ncpP, prepNcP
-      , adjpP, prepNumpP, prepAdjpP, infpP
-      , orP, reflP, eP, comparpP ]
-      <|> otherP
-      <?> "phraseP"
+phraseP :: Parser Phrase
+phraseP = A.choice
+  [ npP, prepNpP, cpP, ncpP, prepNcP, prepGerP
+  , adjpP, prepNumpP, prepAdjpP, infpP
+  , orP, reflP, eP, nonchP, comparpP
+  , paspP
+  -- , Expand <$> exppP
+  , exppP
+  , fixedP ]
+  -- <|> otherP
+  <?> "phraseP"
 
 
-    npP :: Parser Phrase
-    npP = regNpP <|> lexNpP
-      <?> "npP"
-      where
-        regNpP = string "np" *> do
-          cas <- between '(' ')' caseP
-          return $ NP cas Nothing [] (Atr [])
-          <?> "regNpP"
-        lexNpP = string "lex" *> do
-          between '(' ')' $ string "np" *> do
-            cas <- between '(' ')' caseP
-            num <- comma *> maybe_ numberP
-            lks <- comma *> lexicalHeadsP
-            atr <- comma *> attributeP
-            return $ NP cas num lks atr
-          <?> "lexNpP"
+npP :: Parser Phrase
+npP = regNpP <|> lexNpP
+  <?> "npP"
+  where
+    regNpP = string "np" *> do
+      cas <- between '(' ')' caseP
+      return $ NP cas Nothing [] (Atr [])
+      <?> "regNpP"
+    lexNpP = string "lex" *> do
+      between '(' ')' $ string "np" *> do
+        cas <- between '(' ')' caseP
+        num <- comma *> maybe_ (agreeP numberP)
+        lks <- comma *> lexicalHeadsP
+        atr <- comma *> attributeP
+        return $ NP cas num lks atr
+      <?> "lexNpP"
 
 
-    prepNpP :: Parser Phrase
-    prepNpP = plain <|> lexicalized
-      <?> "prepNpP"
-      where
-        plain = string "prepnp" *> do
-          between '(' ')' $ do
-            -- prp <- A.takeWhile1 C.isLetter
-            prp <- prepP
-            cas <- A.char ',' *> caseP
-            return $ PrepNP prp cas Nothing [] (Atr [])
-          <?> "plain PrepNP"
-        lexicalized = string "lex" *> do
-          between '(' ')' $ string "prepnp" *> do
-            (prp, cas) <- between '(' ')' $ do
-              -- prp <- A.takeWhile1 C.isLetter
-              prp <- prepP
-              cas <- comma *> caseP
-              return (prp, cas)
-            num <- comma *> maybe_ numberP
-            lks <- comma *> lexicalHeadsP
-            atr <- comma *> attributeP
-            return $ PrepNP prp cas num lks atr
-          <?> "lexicalized PrepNP"
+prepNpP :: Parser Phrase
+prepNpP = plain <|> lexicalized
+  <?> "prepNpP"
+  where
+    plain = string "prepnp" *> do
+      between '(' ')' $ do
+        -- prp <- A.takeWhile1 C.isLetter
+        prp <- prepP
+        cas <- A.char ',' *> caseP
+        return $ PrepNP prp cas Nothing [] (Atr [])
+      <?> "plain PrepNP"
+    lexicalized = string "lex" *> do
+      between '(' ')' $ string "prepnp" *> do
+        (prp, cas) <- between '(' ')' $ do
+          -- prp <- A.takeWhile1 C.isLetter
+          prp <- prepP
+          cas <- comma *> caseP
+          return (prp, cas)
+        num <- comma *> maybe_ numberP
+        lks <- comma *> lexicalHeadsP
+        atr <- comma *> attributeP
+        return $ PrepNP prp cas num lks atr
+      <?> "lexicalized PrepNP"
 
 
-    cpP :: Parser Phrase
-    cpP = plain <|> lexicalized
-      <?> "CP"
-      where
-        plain = string "cp" *> do
-          between '(' ')' $ do
-            cmp <- compP
-            return $ CP cmp Nothing [] Nothing (Atr [])
-          <?> "plain CP"
-        lexicalized = string "lex" *> do
-          between '(' ')' $ string "cp" *> do
-            cmp <- between '(' ')' compP
-            neg <- comma *> maybe_ negationP
-            lks <- comma *> lexicalHeadsP
-            unk <- comma *> A.takeTill (==',')
-            atr <- comma *> attributeP
-            return $ CP cmp neg lks (Just unk) atr
-          <?> "lexicalized CP"
+cpP :: Parser Phrase
+cpP = plain <|> lexicalized
+  <?> "CP"
+  where
+    plain = string "cp" *> do
+      between '(' ')' $ do
+        cmp <- compP
+        return $ CP cmp Nothing [] Nothing (Atr [])
+      <?> "plain CP"
+    lexicalized = string "lex" *> do
+      between '(' ')' $ string "cp" *> do
+        cmp <- between '(' ')' compP
+        neg <- comma *> maybe_ negationP
+        lks <- comma *> lexicalHeadsP
+        unk <- comma *> A.takeTill (==',')
+        atr <- comma *> attributeP
+        return $ CP cmp neg lks (Just unk) atr
+      <?> "lexicalized CP"
 
 
-    ncpP :: Parser Phrase
-    ncpP = plain <|> lexicalized
-      <?> "NCP"
-      where
-        plain = string "ncp" *> do
-          between '(' ')' $ do
-            cas <- caseP
-            cmp <- comma *> compP
-            return $ NCP cmp cas Nothing [] Nothing (Atr [])
-          <?> "plain NCP"
-        lexicalized = string "lex" *> do
-          between '(' ')' $ string "ncp" *> do
-            (cas, cmp) <- between '(' ')' $ do
-              cas <- caseP
-              cmp <- comma *> compP
-              return (cas, cmp)
-            neg <- comma *> maybe_ negationP
-            lks <- comma *> lexicalHeadsP
-            unk <- comma *> A.takeTill (==',')
-            atr <- comma *> attributeP
-            return $ NCP cmp cas neg lks (Just unk) atr
-          <?> "lexicalized NCP"
+ncpP :: Parser Phrase
+ncpP = plain <|> lexicalized
+  <?> "NCP"
+  where
+    plain = string "ncp" *> do
+      between '(' ')' $ do
+        cas <- caseP
+        cmp <- comma *> compP
+        return $ NCP cmp cas Nothing [] Nothing (Atr [])
+      <?> "plain NCP"
+    lexicalized = string "lex" *> do
+      between '(' ')' $ string "ncp" *> do
+        (cas, cmp) <- between '(' ')' $ do
+          cas <- caseP
+          cmp <- comma *> compP
+          return (cas, cmp)
+        neg <- comma *> maybe_ negationP
+        lks <- comma *> lexicalHeadsP
+        unk <- comma *> A.takeTill (==',')
+        atr <- comma *> attributeP
+        return $ NCP cmp cas neg lks (Just unk) atr
+      <?> "lexicalized NCP"
 
 
-    prepNcP :: Parser Phrase
-    prepNcP = plain <|> lexicalized
-      <?> "PrepNCP"
-      where
-        plain = string "prepncp" *> do
-          between '(' ')' $ do
-            -- prp <- A.takeWhile1 C.isLetter
-            prp <- prepP
-            cas <- comma *> caseP
-            cmp <- comma *> compP
-            return $ PrepNCP prp cmp cas Nothing [] Nothing (Atr [])
-          <?> "plain PrepNCP"
-        lexicalized = string "lex" *> do
-          between '(' ')' $ do
-            pcp <- plain
-            neg <- comma *> maybe_ negationP
-            lks <- comma *> lexicalHeadsP
-            unk <- comma *> A.takeTill (==',')
-            atr <- comma *> attributeP
-            return pcp
-              { negation = neg
-              , lexicalHead = lks
-              , cpUnknown = Just unk
-              , dependents = atr }
-          <?> "lexicalized PrepNCP"
+prepNcP :: Parser Phrase
+prepNcP = plain <|> lexicalized
+  <?> "PrepNCP"
+  where
+    plain = string "prepncp" *> do
+      between '(' ')' $ do
+        -- prp <- A.takeWhile1 C.isLetter
+        prp <- prepP
+        cas <- comma *> caseP
+        cmp <- comma *> compP
+        return $ PrepNCP prp cmp cas Nothing [] Nothing (Atr [])
+      <?> "plain PrepNCP"
+    lexicalized = string "lex" *> do
+      between '(' ')' $ do
+        pcp <- plain
+        neg <- comma *> maybe_ negationP
+        lks <- comma *> lexicalHeadsP
+        unk <- comma *> A.takeTill (==',')
+        atr <- comma *> attributeP
+        return pcp
+          { negation = neg
+          , lexicalHead = lks
+          , cpUnknown = Just unk
+          , dependents = atr }
+      <?> "lexicalized PrepNCP"
 
 
-    adjpP :: Parser Phrase
-    adjpP = plain <|> lexicalized
-      <?> "AdjP"
-      where
-        plain = string "adjp" *> do
-          between '(' ')' $ do
-            cas <- caseP
-            return $ AdjP cas Nothing Nothing Nothing [] (Atr [])
-          <?> "plain AdjP"
-        lexicalized = string "lex" *> do
-          between '(' ')' $ do
-            adj <- plain
-            num <- comma *> agreeP numberP
-            gen <- comma *> agreeP genderP
-            deg <- comma *> degreeP
-            lks <- comma *> lexicalHeadsP
-            atr <- comma *> attributeP
-            return adj
-              { adjNumber = Just num
-              , gender = Just gen
-              , degree = Just deg
-              , lexicalHead = lks
-              , dependents = atr }
-          <?> "lexicalized AdjP"
+prepGerP :: Parser Phrase
+prepGerP = plain <|> lexicalized
+  <?> "PrepGerP"
+  where
+    plain = string "prepgerp" *> do
+      between '(' ')' $ do
+        prp <- prepP
+        cas <- comma *> caseP
+        return $ PrepGerP prp cas Nothing Nothing [] Nothing (Atr [])
+      <?> "plain PrepGerP"
+    lexicalized = string "lex" *> do
+      between '(' ')' $ do
+        ger <- plain
+        num <- comma *> maybe_ numberP
+        neg <- comma *> maybe_ negationP
+        lks <- comma *> lexicalHeadsP
+        unk <- comma *> A.takeTill (==',')
+        atr <- comma *> attributeP
+        return ger
+          { number = num
+          , negation = neg
+          , lexicalHead = lks
+          , cpUnknown = Just unk
+          , dependents = atr }
+      <?> "lexicalized PrepGerP"
 
 
-    prepAdjpP :: Parser Phrase
-    prepAdjpP = plain <|> lexicalized
-      <?> "PrepAdjP"
-      where
-        plain = string "prepadjp" *> do
-          between '(' ')' $ do
-            prp <- prepP
-            cas <- comma *> caseP
-            return $ PrepAdjP prp cas Nothing Nothing Nothing [] (Atr [])
-          <?> "plain PrepAdjP"
-        lexicalized = string "lex" *> do
-          between '(' ')' $ do
-            pap <- plain
-            num <- comma *> agreeP numberP
-            gen <- comma *> agreeP genderP
-            deg <- comma *> degreeP
-            lks <- comma *> lexicalHeadsP
-            atr <- comma *> attributeP
-            return pap
-              { adjNumber = Just num
-              , gender = Just gen
-              , degree = Just deg
-              , lexicalHead = lks
-              , dependents = atr }
-          <?> "lexicalized PrepAdjP"
+adjpP :: Parser Phrase
+adjpP = plain <|> lexicalized
+  <?> "AdjP"
+  where
+    plain = string "adjp" *> do
+      between '(' ')' $ do
+        cas <- caseP
+        return $ AdjP cas Nothing Nothing Nothing [] (Atr [])
+      <?> "plain AdjP"
+    lexicalized = string "lex" *> do
+      between '(' ')' $ do
+        adj <- plain
+        num <- comma *> agreeP numberP
+        gen <- comma *> agreeP genderP
+        deg <- comma *> degreeP
+        lks <- comma *> lexicalHeadsP
+        atr <- comma *> attributeP
+        return adj
+          { agrNumber = Just num
+          , gender = Just gen
+          , degree = Just deg
+          , lexicalHead = lks
+          , dependents = atr }
+      <?> "lexicalized AdjP"
 
 
-    prepNumpP :: Parser Phrase
-    prepNumpP = plain <|> lexicalized
-      <?> "prepNumP"
-      where
-        plain = string "prepnump" *> do
-          between '(' ')' $ do
-            prp <- prepP
-            cas <- comma *> caseP
-            return $ PrepNumP prp cas [] [] (Atr [])
-          <?> "plain PrepNumP"
-        lexicalized = string "lex" *> do
-          between '(' ')' $ do
-            pnp <- plain
-            num <- comma *> lexicalHeadsP
-            lks <- comma *> lexicalHeadsP
-            atr <- comma *> attributeP
-            return $ pnp
-              { lexicalNumber = num
-              , lexicalHead = lks
-              , dependents = atr }
-          <?> "lexicalized PrepNumP"
+prepAdjpP :: Parser Phrase
+prepAdjpP = plain <|> lexicalized
+  <?> "PrepAdjP"
+  where
+    plain = string "prepadjp" *> do
+      between '(' ')' $ do
+        prp <- prepP
+        cas <- comma *> caseP
+        return $ PrepAdjP prp cas Nothing Nothing Nothing [] (Atr [])
+      <?> "plain PrepAdjP"
+    lexicalized = string "lex" *> do
+      between '(' ')' $ do
+        pap <- plain
+        num <- comma *> agreeP numberP
+        gen <- comma *> agreeP genderP
+        deg <- comma *> degreeP
+        lks <- comma *> lexicalHeadsP
+        atr <- comma *> attributeP
+        return pap
+          { agrNumber = Just num
+          , gender = Just gen
+          , degree = Just deg
+          , lexicalHead = lks
+          , dependents = atr }
+      <?> "lexicalized PrepAdjP"
 
 
-    infpP :: Parser Phrase
-    infpP = plain <|> lexicalized
-      <?> "InfP"
-      where
-        plain = string "infp" *> do
-          between '(' ')' $ do
-            asp <- maybe_ aspectP
-            return $ InfP asp Nothing [] False (Atr [])
-          <?> "plain InfP"
-        lexicalized = string "lex" *> do
-          between '(' ')' $ do
-            inf <- plain
-            neg <- comma *> maybe_ negationP
-            lks <- comma *> lexicalHeadsP
-            rfl <- comma *> sieP
-            atr <- comma *> attributeP
-            return $ inf
-              { negation = neg
-              , lexicalHead = lks
-              , reflexive = rfl
-              , dependents = atr }
-          <?> "lexicalized InfP"
+prepNumpP :: Parser Phrase
+prepNumpP = plain <|> lexicalized
+  <?> "prepNumP"
+  where
+    plain = string "prepnump" *> do
+      between '(' ')' $ do
+        prp <- prepP
+        cas <- comma *> caseP
+        return $ PrepNumP prp cas [] [] (Atr [])
+      <?> "plain PrepNumP"
+    lexicalized = string "lex" *> do
+      between '(' ')' $ do
+        pnp <- plain
+        num <- comma *> lexicalHeadsP
+        lks <- comma *> lexicalHeadsP
+        atr <- comma *> attributeP
+        return $ pnp
+          { lexicalNumber = num
+          , lexicalHead = lks
+          , dependents = atr }
+      <?> "lexicalized PrepNumP"
 
 
-    comparpP :: Parser Phrase
-    comparpP = plain <|> lexicalized
-      <?> "ComparP"
-      where
-        plain = string "compar" *> do
-          between '(' ')' $ do
-            conj <- A.takeTill (`elem` [',', ')'])
-            return $ ComparP conj []
-          <?> "plain ComparP"
-        lexicalized = string "lex" *> do
-          between '(' ')' $ do
-            comp <- plain <* comma
-            args <- phraseP `A.sepBy1'` A.char '+'
-            return $ comp {comparFrame = concat args}
-          <?> "lexicalized ComparP"
+infpP :: Parser Phrase
+infpP = plain <|> lexicalized
+  <?> "InfP"
+  where
+    plain = string "infp" *> do
+      between '(' ')' $ do
+        asp <- maybe_ aspectP
+        return $ InfP asp Nothing [] False (Atr [])
+      <?> "plain InfP"
+    lexicalized = string "lex" *> do
+      between '(' ')' $ do
+        inf <- plain
+        neg <- comma *> maybe_ negationP
+        lks <- comma *> lexicalHeadsP
+        rfl <- comma *> sieP
+        atr <- comma *> attributeP
+        return $ inf
+          { negation = neg
+          , lexicalHead = lks
+          , reflexive = rfl
+          , dependents = atr }
+      <?> "lexicalized InfP"
 
 
-    attributeP :: Parser Attribute
-    attributeP =
-      A.choice [natrP, atr1P, atrP, ratr1P, ratrP]
-      <?> "attributeP"
-      where
-        natrP  = NAtr <$ A.string "natr"
-        atrP   = someAtrP "atr" Atr
-        atr1P  = someAtrP "atr1" Atr1
-        ratrP  = someAtrP "ratr" RAtr
-        ratr1P = someAtrP "ratr1" RAtr1
-        someAtrP atrName mkAttr =
-          A.string atrName *> do
-            fmap mkAttr
-              . A.option []
-              $ between '(' ')' frameP
-          <?> T.unpack atrName
+comparpP :: Parser Phrase
+comparpP = plain <|> lexicalized
+  <?> "ComparP"
+  where
+    plain = string "compar" *> do
+      between '(' ')' $ do
+        conj <- A.takeTill (`elem` [',', ')'])
+        return $ ComparP conj []
+      <?> "plain ComparP"
+    lexicalized = string "lex" *> do
+      between '(' ')' $ do
+        comp <- plain <* comma
+        args <- phraseP `A.sepBy1'` A.char '+'
+        -- return $ comp {comparFrame = concat args}
+        return $ comp {comparFrame = args}
+      <?> "lexicalized ComparP"
 
 
-    orP, reflP, eP :: Parser Phrase
-    orP   = Or   <$ string "or"
-    reflP = Refl <$ string "refl"
-    eP    = E    <$ string "E"
+paspP :: Parser Phrase
+paspP = plain <|> lexicalized
+  <?> "PasP"
+  where
+    plain = string "ppasp" *> do
+      between '(' ')' $ do
+        cas <- caseP
+        return $ PasP cas Nothing Nothing Nothing [] (Atr [])
+      <?> "plain PasP"
+    lexicalized = string "lex" *> do
+      between '(' ')' $ do
+        pas <- plain
+        num <- comma *> agreeP numberP
+        gen <- comma *> agreeP genderP
+        neg <- comma *> maybe_ negationP
+        lks <- comma *> lexicalHeadsP
+        atr <- comma *> attributeP
+        return pas
+          { agrNumber = Just num
+          , gender = Just gen
+          , negation = neg
+          , lexicalHead = lks
+          , dependents = atr }
+      <?> "lexicalized PasP"
 
 
-    -- | A parser which should handle any kind of phrase
-    -- (but it doesn't really).
-    otherP :: Parser [Phrase]
-    otherP = do
-      x <- A.takeTill (`elem` [';', '}'])
-      return $ case M.lookup x expMap of
-        Nothing -> [Other x]
-        Just xs -> concatMap parsePhrase xs
-      <?> "otherP"
+fixedP :: Parser Phrase
+fixedP = string "fixed" *> do
+  between '(' ')' $ do
+    typ <- phraseP
+    comma
+    lks <- lexicalHeadP
+    return Fixed
+      { fixedTyp = typ
+      , fixedLex = lks }
+  <?> "fixedP"
 
 
-    -- | Parse an embedded phrase, `error` if not possible.
-    parsePhrase :: Text -> [Phrase]
-    parsePhrase = takeRight . A.parseOnly (phraseP <* A.endOfInput)
+orP, reflP, eP, nonchP :: Parser Phrase
+orP    = Or   <$ string "or"
+reflP  = Refl <$ string "refl"
+eP     = E    <$ string "E"
+nonchP = Nonch <$ string "nonch"
 
+
+--     -- | A parser which should handle any kind of phrase
+--     -- (but it doesn't really).
+--     otherP :: Parser [Phrase]
+--     otherP = do
+--       x <- A.takeTill (`elem` [';', '}'])
+--       return $ case M.lookup x expMap of
+--         Nothing -> [Other x]
+--         Just xs -> concatMap parsePhrase xs
+--       <?> "otherP"
+--
+--
+--     -- | Parse an embedded phrase, `error` if not possible.
+--     parsePhrase :: Text -> [Phrase]
+--     parsePhrase = takeRight . A.parseOnly (phraseP <* A.endOfInput)
+
+
+attributeP :: Parser Attribute
+attributeP =
+  A.choice [natrP, atr1P, atrP, ratr1P, ratrP]
+  <?> "attributeP"
+  where
+    natrP  = NAtr <$ A.string "natr"
+    atrP   = someAtrP "atr" Atr
+    atr1P  = someAtrP "atr1" Atr1
+    ratrP  = someAtrP "ratr" RAtr
+    ratr1P = someAtrP "ratr1" RAtr1
+    someAtrP atrName mkAttr =
+      A.string atrName *> do
+        fmap mkAttr
+          . A.option []
+          $ between '(' ')' frameP
+      <?> T.unpack atrName
 
 
 breakP :: Parser ()
@@ -842,6 +985,138 @@ agreeP p = A.choice
   [ Agree <$ string "agr"
   , Value <$> p ]
   <?> "agreeP"
+
+
+-------------------------------------------------------------
+-- Expansion map processing
+-------------------------------------------------------------
+
+
+-- -- | Expandable phrase.
+-- data ExpPhrase
+--   deriving (Show, Eq, Ord)
+
+
+exppP :: Parser Phrase
+exppP = A.choice
+  [comPrepNP, xpP, advpP, posspP]
+
+
+comPrepNP :: Parser Phrase
+comPrepNP = string "comprepnp" *> do
+  between '(' ')' $ do
+    prep <- A.takeTill (==')')
+    return $ ComPrepNP prep
+
+
+xpP :: Parser Phrase
+xpP = plain <|> lexicalized
+  <?> "XP"
+  where
+    plain = string "xp" *> do
+      between '(' ')' $ do
+        cat <- A.takeWhile1 C.isLetter
+        val <- A.option Nothing
+          (Just <$> between '[' ']' phraseP)
+        return $ XP cat val -- Nothing [] (Atr [])
+      <?> "plain XP"
+    lexicalized = string "lex" *> do
+      between '(' ')' $ do
+        xp  <- plain
+        case xpVal xp of
+          Just ap@AdvP{..} -> do
+            deg <- comma *> maybe_ degreeP
+            lks <- comma *> lexicalHeadsP
+            atr <- comma *> attributeP
+            let ap' = ap
+                  { degree = deg
+                  , lexicalHead = lks
+                  , dependents = atr }
+            return xp {xpVal = Just ap'}
+          Just pp@PrepNP{..} -> do
+            num <- comma *> maybe_ numberP
+            lks <- comma *> lexicalHeadsP
+            atr <- comma *> attributeP
+            let pp' = pp
+                  { number = num
+                  , lexicalHead = lks
+                  , dependents = atr }
+            return xp {xpVal = Just pp'}
+          Just np@NP{..} -> do
+            num <- comma *> maybe_ (agreeP numberP)
+            lks <- comma *> lexicalHeadsP
+            atr <- comma *> attributeP
+            let np' = np
+                  { agrNumber = num
+                  , lexicalHead = lks
+                  , dependents = atr }
+            return xp {xpVal = Just np'}
+          _ -> error "xpP: the unthinkable happened"
+      <?> "lexicalized XP"
+    -- xpApP xp ap@AdvP{..} =
+
+
+advpP :: Parser Phrase
+advpP = plain <|> lexicalized
+  <?> "AdvP"
+  where
+    plain = string "advp" *> do
+      between '(' ')' $ do
+        cat <- A.takeWhile1 C.isLetter
+        return $ AdvP cat Nothing [] (Atr [])
+      <?> "plain AdvP"
+    lexicalized = string "lex" *> do
+      between '(' ')' $ do
+        adv <- plain
+        deg <- comma *> maybe_ degreeP
+        lks <- comma *> lexicalHeadsP
+        atr <- comma *> attributeP
+        return adv
+          { degree = deg
+          , lexicalHead = lks
+          , dependents = atr }
+      <?> "lexicalized AdvP"
+
+
+posspP :: Parser Phrase
+posspP = PossP <$ string "possp"
+
+
+-- -- ^ Expansion map: each `Phrase` can be expanded to a collection
+-- -- of frames, each frame consisting itself of a list of required phrases.
+-- type ExpMap = M.Map ExpPhrase [[Phrase]]
+--
+--
+-- -- | Expandable phrase.
+-- data ExpPhrase a = ExpPhrase
+--   { expFun :: Text
+--   -- ^ Name of the function (class of the phrase type)
+--   , expArg :: Maybe (Text, Maybe a)
+--   -- ^ Name of the argument of the function (if specified) and,
+--   -- optionally, the corresponding value.
+--   } deriving (Show, Eq, Ord)
+
+
+-- -- | Result of the expansion.
+-- data ExpTo = ExpTo
+--   {}
+
+
+-- -- | Expansion map which maps
+-- data ExpMap = ExpMap
+--   { phraseExpansions :: M.Map (ExpPhrase ()) [[Phrase]]
+--   -- ^ Each `ExpPhrase` can be expanded to a collection of frames,
+--   -- each frame consisting itself of a list of required phrases.
+--   , pseudoExpansions :: M.Map (ExpPhrase ()) [Text]
+--   -- ^ Phrase type expansions which lead to lexical data.
+--   -- Not clear how to handle them yet.
+--   , attrSubtypes     :: M.Map Text [Text]
+--   -- ^ Attribute subtypes expansions.
+--   } deriving (Show, Eq, Ord)
+
+
+-- -- | Resolve the expansion map, i.e.,
+-- resolveExpMap :: E.ExpansionMap -> ResolvedExpMap
 
 
 -------------------------------------------------------------
