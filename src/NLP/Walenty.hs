@@ -1,3 +1,4 @@
+{-# LANGUAGE EmptyDataDecls    #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards   #-}
 
@@ -24,9 +25,10 @@ module NLP.Walenty
 import           Control.Applicative  ((<|>))
 import           Control.Monad        (void)
 import qualified Data.Char            as C
+import qualified Data.Map.Strict      as M
 -- import qualified Data.Map.Strict      as M
 -- import           Data.Foldable        (asum)
--- import           Data.Maybe           (mapMaybe)
+import           Data.Maybe           (maybeToList)
 import           Data.Text            (Text)
 import qualified Data.Text            as T
 import qualified Data.Text.Lazy       as L
@@ -140,7 +142,7 @@ data Phrase
       -- ^ Preposition
     , caseG       :: Case
       -- ^ Grammatical case
-    , agrNumber      :: Maybe (Agree Number)
+    , agrNumber   :: Maybe (Agree Number)
       -- ^ Number (if specified)
     , lexicalHead :: [Text]
       -- ^ Lexical head (if specified)
@@ -559,8 +561,7 @@ phraseP = A.choice
   , adjpP, numpP, prepNumpP, prepAdjpP, infpP
   , orP, reflP, eP, nonchP, comparpP, pactpP
   , paspP, prepPaspP, distrpP, qublicP
-  -- , Expand <$> exppP
-  , exppP
+  , comPrepNP, xpP, advpP, posspP
   , fixedP ]
   -- <|> otherP
   <?> "phraseP"
@@ -956,12 +957,13 @@ fixedP = string "fixed" *> do
   <?> "fixedP"
 
 
-orP, reflP, eP, nonchP, distrpP :: Parser Phrase
+orP, reflP, eP, nonchP, distrpP, posspP :: Parser Phrase
 orP    = Or   <$ string "or"
 reflP  = Refl <$ string "refl"
 eP     = E    <$ string "E"
 nonchP = Nonch <$ string "nonch"
 distrpP = DistrP <$ string "distrp"
+posspP = PossP <$ string "possp"
 
 
 --     -- | A parser which should handle any kind of phrase
@@ -1140,19 +1142,9 @@ agreeP p = A.choice
   <?> "agreeP"
 
 
--------------------------------------------------------------
--- Expansion map processing
--------------------------------------------------------------
-
-
--- -- | Expandable phrase.
--- data ExpPhrase
---   deriving (Show, Eq, Ord)
-
-
-exppP :: Parser Phrase
-exppP = A.choice
-  [comPrepNP, xpP, advpP, posspP]
+-- exppP :: Parser Phrase
+-- exppP = A.choice
+--   [comPrepNP, xpP, advpP, posspP]
 
 
 comPrepNP :: Parser Phrase
@@ -1281,28 +1273,17 @@ advpP = plain <|> lexicalized
       <?> "lexicalized AdvP"
 
 
-posspP :: Parser Phrase
-posspP = PossP <$ string "possp"
+-------------------------------------------------------------
+-- Expansion map processing
+-------------------------------------------------------------
 
 
--- -- ^ Expansion map: each `Phrase` can be expanded to a collection
--- -- of frames, each frame consisting itself of a list of required phrases.
--- type ExpMap = M.Map ExpPhrase [[Phrase]]
---
---
--- -- | Expandable phrase.
--- data ExpPhrase a = ExpPhrase
---   { expFun :: Text
---   -- ^ Name of the function (class of the phrase type)
---   , expArg :: Maybe (Text, Maybe a)
---   -- ^ Name of the argument of the function (if specified) and,
---   -- optionally, the corresponding value.
---   } deriving (Show, Eq, Ord)
+-- | Expansion value.  Either a word form or an alternative of frames.
+type ExpVal = Either [Text] [[Phrase]]
 
 
--- -- | Result of the expansion.
--- data ExpTo = ExpTo
---   {}
+-- | Expansion map.
+type ExpMap = M.Map Phrase ExpVal
 
 
 -- -- | Expansion map which maps
@@ -1318,8 +1299,51 @@ posspP = PossP <$ string "possp"
 --   } deriving (Show, Eq, Ord)
 
 
--- -- | Resolve the expansion map, i.e.,
--- resolveExpMap :: E.ExpansionMap -> ResolvedExpMap
+-- | Resolve the expansion map, i.e.,
+resolveExpMap :: E.ExpansionMap -> ExpMap
+resolveExpMap =
+  M.fromList . map resolvePair . M.toList
+  where
+    resolvePair (from, to) =
+      let x = parsePhrase from
+      in (x, case x of
+             AdvP{} -> Left to
+             _ -> Right (map parsePhrases to)
+         )
+    parsePhrases = takeRight . A.parseOnly (phrasePlusP <* A.endOfInput)
+    parsePhrase = takeRight . A.parseOnly (phraseP <* A.endOfInput)
+    phrasePlusP =
+      phraseP `A.sepBy1'` (A.skipSpace *> A.char ';' <* A.skipSpace)
+      <?> "phrasePlusP"
+    takeRight (Right x) = x
+    takeRight (Left e) = error e
+
+
+-- expandVerb :: ExpMap -> Verb -> Verb
+-- expandVerb expMap v =
+--   v {frame = expandFrame (frame v)}
+--   where
+--     expandFrame = map expandArg
+--     expandArg a =
+--       let ..?
+--       in a {phraseAlt = map (expandPhrase expMap) (phraseAlt a)}
+
+
+-- | Recursively expand the phrase using the expansion map.
+expandPhrase :: ExpMap -> Phrase -> [[Phrase]]
+expandPhrase expMap v = (map . map) (expandInside expMap) $
+  case M.lookup v expMap of
+    Nothing -> [[v]]
+    Just (Left xs) -> [maybeToList $ lexicalize expMap xs v]
+    Just (Right vss) -> vss
+
+
+expandInside :: ExpMap -> Phrase -> Phrase
+expandInside expMap p = undefined
+
+
+lexicalize :: ExpMap -> [Text] -> Phrase -> Maybe Phrase
+lexicalize = undefined
 
 
 -------------------------------------------------------------
