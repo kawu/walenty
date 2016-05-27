@@ -32,6 +32,8 @@ library
 
     exposed-modules:
         NLP.Walenty
+      , NLP.Walenty.Types
+      , NLP.Walenty.Parser
       , NLP.Walenty.Expand
 
     ghc-options: -Wall
