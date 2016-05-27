@@ -1,31 +1,24 @@
-{-# LANGUAGE DeriveFunctor     #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards   #-}
 
 
 module NLP.Walenty.Parser
-( readWalenty
-, parseWalenty
+( lineP
+, phraseP
+, Comment
 ) where
 
 
 import           Control.Applicative  ((<|>))
 import           Control.Monad        (void)
 import qualified Data.Char            as C
-import qualified Data.Map.Strict      as M
--- import qualified Data.Map.Strict      as M
--- import           Data.Foldable        (asum)
-import           Data.Maybe           (maybeToList)
 import           Data.Text            (Text)
 import qualified Data.Text            as T
-import qualified Data.Text.Lazy       as L
-import qualified Data.Text.Lazy.IO    as L
 
 import           Data.Attoparsec.Text (Parser, string, (<?>))
 import qualified Data.Attoparsec.Text as A
 
 
-import qualified NLP.Walenty.Expand   as E
 import           NLP.Walenty.Types
 
 
@@ -36,27 +29,6 @@ import           NLP.Walenty.Types
 
 -- | A comment line.
 type Comment = Text
-
-
--- | Read Walenty file (verb entries only).
-readWalenty
-  :: FilePath -- ^ Expand file
-  -> FilePath -- ^ Walenty proper
-  -> IO [Either Verb Comment]
-readWalenty expPath walPath = do
-  expMap <- E.readExpansions expPath
-  parseWalenty expMap <$> L.readFile walPath
-
-
--- | Parse Walenty file (verb entries only).
-parseWalenty :: E.ExpansionMap -> L.Text -> [Either Verb Comment]
-parseWalenty expMap
-  = map (takeRight . parseLine . L.toStrict)
-  . filter (not . L.null)
-  . map (L.dropAround $ \c -> C.isSpace c || not (C.isPrint c))
-  . L.lines
-  where
-    parseLine = A.parseOnly $ lineP <* A.endOfInput
 
 
 -- | A line parser (either a verb entry or a comment).
@@ -77,9 +49,9 @@ verbP :: Parser Verb
 verbP = Verb
   <$> (fieldP  <* breakP)
   <*> (certP   <* breakP)
-  <*> (fieldP  <* breakP)
-  <*> (fieldP  <* breakP)
-  <*> (aspectP <* breakP)
+  <*> (maybe_ negationP  <* breakP)
+  <*> (predicativityP <* breakP)
+  <*> (maybe_ aspectP <* breakP)
   <*> frameP
   <?> "verbP"
 
@@ -177,16 +149,16 @@ cpP = plain <|> lexicalized
     plain = string "cp" *> do
       between '(' ')' $ do
         cmp <- compP
-        return $ CP cmp Nothing [] Nothing (Atr [])
+        return $ CP cmp Nothing [] False (Atr [])
       <?> "plain CP"
     lexicalized = string "lex" *> do
       between '(' ')' $ string "cp" *> do
         cmp <- between '(' ')' compP
         neg <- comma *> maybe_ negationP
         lks <- comma *> lexicalHeadsP
-        unk <- comma *> A.takeTill (==',')
+        rfl <- comma *> sieP
         atr <- comma *> attributeP
-        return $ CP cmp neg lks (Just unk) atr
+        return $ CP cmp neg lks rfl atr
       <?> "lexicalized CP"
 
 
@@ -198,7 +170,7 @@ ncpP = plain <|> lexicalized
       between '(' ')' $ do
         cas <- caseP
         cmp <- comma *> compP
-        return $ NCP cmp cas Nothing [] Nothing (Atr [])
+        return $ NCP cmp cas Nothing [] False (Atr [])
       <?> "plain NCP"
     lexicalized = string "lex" *> do
       between '(' ')' $ string "ncp" *> do
@@ -208,9 +180,9 @@ ncpP = plain <|> lexicalized
           return (cas, cmp)
         neg <- comma *> maybe_ negationP
         lks <- comma *> lexicalHeadsP
-        unk <- comma *> A.takeTill (==',')
+        rfl <- comma *> sieP
         atr <- comma *> attributeP
-        return $ NCP cmp cas neg lks (Just unk) atr
+        return $ NCP cmp cas neg lks rfl atr
       <?> "lexicalized NCP"
 
 
@@ -224,19 +196,19 @@ prepNcP = plain <|> lexicalized
         prp <- prepP
         cas <- comma *> caseP
         cmp <- comma *> compP
-        return $ PrepNCP prp cmp cas Nothing [] Nothing (Atr [])
+        return $ PrepNCP prp cmp cas Nothing [] False (Atr [])
       <?> "plain PrepNCP"
     lexicalized = string "lex" *> do
       between '(' ')' $ do
         pcp <- plain
         neg <- comma *> maybe_ negationP
         lks <- comma *> lexicalHeadsP
-        unk <- comma *> A.takeTill (==',')
+        rfl <- comma *> sieP
         atr <- comma *> attributeP
         return pcp
           { negation = neg
           , lexicalHead = lks
-          , cpUnknown = Just unk
+          , reflexive = rfl
           , dependents = atr }
       <?> "lexicalized PrepNCP"
 
@@ -249,7 +221,7 @@ prepGerP = plain <|> lexicalized
       between '(' ')' $ do
         prp <- prepP
         cas <- comma *> caseP
-        return $ PrepGerP prp cas Nothing Nothing [] Nothing (Atr [])
+        return $ PrepGerP prp cas Nothing Nothing [] False (Atr [])
       <?> "plain PrepGerP"
     lexicalized = string "lex" *> do
       between '(' ')' $ do
@@ -257,13 +229,13 @@ prepGerP = plain <|> lexicalized
         num <- comma *> maybe_ numberP
         neg <- comma *> maybe_ negationP
         lks <- comma *> lexicalHeadsP
-        unk <- comma *> A.takeTill (==',')
+        rfl <- comma *> sieP
         atr <- comma *> attributeP
         return ger
           { number = num
           , negation = neg
           , lexicalHead = lks
-          , cpUnknown = Just unk
+          , reflexive = rfl
           , dependents = atr }
       <?> "lexicalized PrepGerP"
 
@@ -301,7 +273,7 @@ pactpP = plain <|> lexicalized
     plain = string "pactp" *> do
       between '(' ')' $ do
         cas <- caseP
-        return $ PactP cas Nothing Nothing Nothing [] Nothing (Atr [])
+        return $ PactP cas Nothing Nothing Nothing [] False (Atr [])
       <?> "plain PactP"
     lexicalized = string "lex" *> do
       between '(' ')' $ do
@@ -310,14 +282,14 @@ pactpP = plain <|> lexicalized
         gen <- comma *> agreeP genderP
         neg <- comma *> maybe_ negationP
         lks <- comma *> lexicalHeadsP
-        unk <- comma *> A.takeTill (==',')
+        rfl <- comma *> sieP
         atr <- comma *> attributeP
         return pac
           { agrNumber = Just num
           , gender = Just gen
           , negation = neg
           , lexicalHead = lks
-          , cpUnknown = Just unk
+          , reflexive = rfl
           , dependents = atr }
       <?> "lexicalized PactP"
 
@@ -569,8 +541,8 @@ certP = A.choice
 aspectP :: Parser Aspect
 aspectP = A.choice
   [ Perfective <$ string "perf"
-  , Imperfective <$ string "imperf"
-  , UnknownAspect <$ string "_" ]
+  , Imperfective <$ string "imperf" ]
+  -- , UnknownAspect <$ string "_" ]
   <?> "aspectP"
 
 
@@ -637,6 +609,13 @@ negationP = A.choice
   [ Neg <$ string "neg"
   , Aff <$ string "aff" ]
   <?> "numberP"
+
+
+predicativityP :: Parser Bool
+predicativityP = A.choice
+  [ True <$ string "pred"
+  , False <$ string "" ]
+  <?> "predicativityP"
 
 
 -- | A parser for lexical (semantic) heads in lexical specifications.
@@ -706,91 +685,87 @@ xpP = plain <|> lexicalized
       between '(' ')' $ do
         cat <- A.takeWhile1 C.isLetter
         val <- A.option Nothing
-          (Just <$> between '[' ']' stdPhraseP)
+          (Just <$> between '[' ']' phraseP)
         return $ XP cat val
       <?> "plain XP"
     lexicalized = string "lex" *> do
       between '(' ')' $ do
-        xp  <- plain
-        case xpVal xp of
-          Just ap@AdvP{..} -> do
-            deg <- comma *> maybe_ degreeP
-            lks <- comma *> lexicalHeadsP
-            atr <- comma *> attributeP
-            let ap' = ap
-                  { degree = deg
-                  , lexicalHead = lks
-                  , dependents = atr }
-            return xp {xpVal = Just ap'}
-          Just pp@PrepNP{..} -> do
-            num <- comma *> maybe_ (agreeP numberP)
-            lks <- comma *> lexicalHeadsP
-            atr <- comma *> attributeP
-            let pp' = pp
-                  { agrNumber = num
-                  , lexicalHead = lks
-                  , dependents = atr }
-            return xp {xpVal = Just pp'}
-          Just np@NP{..} -> do
-            num <- comma *> maybe_ (agreeP numberP)
-            lks <- comma *> lexicalHeadsP
-            atr <- comma *> attributeP
-            let np' = np
-                  { agrNumber = num
-                  , lexicalHead = lks
-                  , dependents = atr }
-            return xp {xpVal = Just np'}
-          Just cp@ComparP{..} -> do
-            args <- comma *> phraseP `A.sepBy1'` A.char '+'
-            let cp' = cp {comparFrame = args}
-            return xp {xpVal = Just cp'}
-          Just pnp@PrepNumP{..} -> do
-            num <- comma *> lexicalHeadsP
-            lks <- comma *> lexicalHeadsP
-            atr <- comma *> attributeP
-            let pnp' = pnp
-                  { lexicalNumber = num
-                  , lexicalHead = lks
-                  , dependents = atr }
-            return xp {xpVal = Just pnp'}
-          Just pap@PrepAdjP{..} -> do
-            num <- comma *> agreeP numberP
-            gen <- comma *> agreeP genderP
-            deg <- comma *> degreeP
-            lks <- comma *> lexicalHeadsP
-            atr <- comma *> attributeP
-            let pap' = pap
-                  { agrNumber = Just num
-                  , gender = Just gen
-                  , degree = Just deg
-                  , lexicalHead = lks
-                  , dependents = atr }
-            return xp {xpVal = Just pap'}
-          Just cp@CP{..} -> do
-            neg <- comma *> maybe_ negationP
-            lks <- comma *> lexicalHeadsP
-            unk <- comma *> A.takeTill (==',')
-            atr <- comma *> attributeP
-            let cp' = cp
-                  { negation = neg
-                  , lexicalHead = lks
-                  , cpUnknown = Just unk
-                  , dependents = atr }
-            return xp {xpVal = Just cp'}
-          Just pg@PrepGerP{..} -> do
-            num <- comma *> maybe_ numberP
-            neg <- comma *> maybe_ negationP
-            lks <- comma *> lexicalHeadsP
-            unk <- comma *> A.takeTill (==',')
-            atr <- comma *> attributeP
-            let pg' = pg
-                  { number = num
-                  , negation = neg
-                  , lexicalHead = lks
-                  , cpUnknown = Just unk
-                  , dependents = atr }
-            return xp {xpVal = Just pg'}
-          _ -> error "xpP: the unthinkable happened"
+        xp <- plain
+        newP <- case xpVal xp of
+          Nothing -> error "xpP: the unthinkable.0 happened"
+          Just (Special _) -> error "xpP: the unthinkable.1 happened"
+          Just (Standard p) -> case p of
+            ap@AdvP{..} -> do
+              deg <- comma *> maybe_ degreeP
+              lks <- comma *> lexicalHeadsP
+              atr <- comma *> attributeP
+              return ap
+                { degree = deg
+                , lexicalHead = lks
+                , dependents = atr }
+            pp@PrepNP{..} -> do
+              num <- comma *> maybe_ (agreeP numberP)
+              lks <- comma *> lexicalHeadsP
+              atr <- comma *> attributeP
+              return pp
+                { agrNumber = num
+                , lexicalHead = lks
+                , dependents = atr }
+            np@NP{..} -> do
+              num <- comma *> maybe_ (agreeP numberP)
+              lks <- comma *> lexicalHeadsP
+              atr <- comma *> attributeP
+              return np
+                { agrNumber = num
+                , lexicalHead = lks
+                , dependents = atr }
+            cp@ComparP{..} -> do
+              args <- comma *> phraseP `A.sepBy1'` A.char '+'
+              return cp {comparFrame = args}
+            pnp@PrepNumP{..} -> do
+              num <- comma *> lexicalHeadsP
+              lks <- comma *> lexicalHeadsP
+              atr <- comma *> attributeP
+              return pnp
+                    { lexicalNumber = num
+                    , lexicalHead = lks
+                    , dependents = atr }
+            pap@PrepAdjP{..} -> do
+              num <- comma *> agreeP numberP
+              gen <- comma *> agreeP genderP
+              deg <- comma *> degreeP
+              lks <- comma *> lexicalHeadsP
+              atr <- comma *> attributeP
+              return pap
+                    { agrNumber = Just num
+                    , gender = Just gen
+                    , degree = Just deg
+                    , lexicalHead = lks
+                    , dependents = atr }
+            cp@CP{..} -> do
+              neg <- comma *> maybe_ negationP
+              lks <- comma *> lexicalHeadsP
+              rfl <- comma *> sieP
+              atr <- comma *> attributeP
+              return cp
+                    { negation = neg
+                    , lexicalHead = lks
+                    , reflexive = rfl
+                    , dependents = atr }
+            pg@PrepGerP{..} -> do
+              num <- comma *> maybe_ numberP
+              neg <- comma *> maybe_ negationP
+              lks <- comma *> lexicalHeadsP
+              rfl <- comma *> sieP
+              atr <- comma *> attributeP
+              return pg
+                    { number = num
+                    , negation = neg
+                    , lexicalHead = lks
+                    , reflexive = rfl
+                    , dependents = atr }
+            _ -> error "xpP: the unthinkable.2 happened"
+        return xp {xpVal = Just (Standard newP)}
       <?> "lexicalized XP"
     -- xpApP xp ap@AdvP{..} =
 
@@ -839,8 +814,3 @@ maybe_ p = A.choice
   [ Nothing <$ A.char '_'
   , Just <$> p ]
   <?> "maybe_"
-
-
-takeRight :: Either [Char] t -> t
-takeRight (Right x) = x
-takeRight (Left e) = error e

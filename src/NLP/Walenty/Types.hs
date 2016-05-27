@@ -19,7 +19,7 @@ module NLP.Walenty.Types
 ) where
 
 
-import           Data.Text            (Text)
+import           Data.Text (Text)
 
 
 -------------------------------------------------------------
@@ -29,17 +29,17 @@ import           Data.Text            (Text)
 
 -- | A verbal lexical entry from /Walenty/.
 data Verb = Verb
-  { base      :: Text
+  { base          :: Text
     -- ^ Base form of the verb
-  , certitude :: CertLevel
+  , certitude     :: CertLevel
     -- ^ Level of certitude of the entry
-  , field3    :: Text
-    -- ^ Unknown
-  , field4    :: Text
-    -- ^ Unknown
-  , aspect    :: Aspect
+  , negativity    :: Maybe Negation
+    -- ^ Negativity
+  , predicativity :: Bool
+    -- ^ Predicativity
+  , aspect        :: Maybe Aspect
     -- ^ Aspect of the verb
-  , frame     :: Frame
+  , frame         :: Frame
     -- ^ Valency frame of the verb
   } deriving (Show, Eq, Ord)
 
@@ -65,7 +65,7 @@ data CertLevel
 data Aspect
   = Perfective
   | Imperfective
-  | UnknownAspect
+  -- | UnknownAspect
   deriving (Show, Eq, Ord)
 
 
@@ -142,7 +142,7 @@ data StdPhrase
       -- ^ Number (if specified)
     , lexicalHead    :: [Text]
       -- ^ Lexical head (if specified)
-    , cpUnknown      :: Maybe Text
+    , reflexive      :: Bool
       -- ^ "się"?
     , dependents     :: Attribute
       -- ^ Dependents (if specified)
@@ -157,7 +157,7 @@ data StdPhrase
       -- ^ Number (if specified)
     , lexicalHead    :: [Text]
       -- ^ Lexical head (if specified)
-    , cpUnknown      :: Maybe Text
+    , reflexive      :: Bool
       -- ^ "się"?
     , dependents     :: Attribute
       -- ^ Dependents (if specified)
@@ -174,7 +174,7 @@ data StdPhrase
       -- ^ Number (if specified)
     , lexicalHead    :: [Text]
       -- ^ Lexical head (if specified)
-    , cpUnknown      :: Maybe Text
+    , reflexive      :: Bool
       -- ^ "się"?
     , dependents     :: Attribute
       -- ^ Dependents (if specified)
@@ -192,7 +192,7 @@ data StdPhrase
       -- ^ Number (if specified)
     , lexicalHead :: [Text]
       -- ^ Lexical head (if specified)
-    , cpUnknown   :: Maybe Text
+    , reflexive   :: Bool
       -- ^ "się"?
     , dependents  :: Attribute
       -- ^ Dependents (if specified)
@@ -224,7 +224,7 @@ data StdPhrase
       -- ^ Negation (if specified)
     , lexicalHead :: [Text]
       -- ^ Lexical head (if specified)
-    , cpUnknown   :: Maybe Text
+    , reflexive   :: Bool
       -- ^ "się"?
     , dependents  :: Attribute
       -- ^ Dependents (if specified)
@@ -284,15 +284,6 @@ data StdPhrase
       -- ^ Dependents (if specified)
     }
     -- ^ Infinitival phrase
-  | ComparP
-    { lexicalHead  :: [Text]
-      -- ^ Comparative conjunction
-    , comparFrame :: [Phrase]
-      -- ^ A list of arguments, with no functional or control specifications.
-      -- Alternatives cannot be represented.  TODO: does it mean that all
-      -- have to be present?
-    }
-    -- ^ Comparative phrase
   | PasP
     { caseG       :: Case
       -- ^ Grammatical case
@@ -344,6 +335,16 @@ data StdPhrase
       -- ^ Dependents (if specified)
     }
     -- ^ Qublical phrase (:-))
+  | ComparP
+    { lexicalHead :: [Text]
+      -- ^ Comparative conjunction
+    , comparFrame :: [Phrase]
+      -- ^ A list of arguments, with no functional or control specifications.
+      -- Alternatives cannot be represented.  TODO: does it mean that all
+      -- have to be present?  TODO: Could we encode them as dependents?
+      -- Then all standard phrases would provide `dependents`.
+    }
+    -- ^ Comparative phrase
   deriving (Show, Eq, Ord)
 
 
@@ -371,7 +372,7 @@ data SpecPhrase
   | XP
     { xpCat :: Text
       -- ^ Locative, ablative, adlative, etc. (see the Walenty webpage)
-    , xpVal :: Maybe StdPhrase
+    , xpVal :: Maybe Phrase
       -- ^ The value of the XP category can be specified
       -- at the site of its use
     }
@@ -467,4 +468,7 @@ data Attribute
     -- ^ Required attribute
   | RAtr1 Frame
     -- ^ Like `RAtr`, but at most one dependent
+    -- TODO: therefore, this is not really a frame,
+    -- because in a frame all arguments have to be
+    -- realized.
   deriving (Show, Eq, Ord)
