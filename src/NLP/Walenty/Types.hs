@@ -65,7 +65,7 @@ data CertLevel
 data Aspect
   = Perfective
   | Imperfective
-  -- | UnknownAspect
+  -- -- | UnknownAspect
   deriving (Show, Eq, Ord)
 
 
