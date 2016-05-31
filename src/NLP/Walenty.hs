@@ -7,6 +7,8 @@
 module NLP.Walenty
 ( readWalenty
 , parseWalenty
+, readExpMap
+, expandVerb
 ) where
 
 
@@ -32,25 +34,51 @@ import           NLP.Walenty.Types
 
 -- | Read Walenty file (verb entries only).
 readWalenty
-  :: FilePath -- ^ Expansion file
-  -> FilePath -- ^ Walenty proper
+  :: FilePath -- ^ Walenty proper
   -> IO [Either Verb Comment]
-readWalenty expPath walPath = do
-  expMap <- E.readExpansions expPath
-  parseWalenty expMap <$> L.readFile walPath
+readWalenty walPath = do
+  parseWalenty <$> L.readFile walPath
 
 
 -- | Parse Walenty file (verb entries only).
-parseWalenty :: E.ExpansionMap -> L.Text -> [Either Verb Comment]
-parseWalenty expMap0
-  = map (left $ expandVerb expMap)
-  . map (takeRight . parseLine . L.toStrict)
+parseWalenty :: L.Text -> [Either Verb Comment]
+parseWalenty
+  = map (takeRight . parseLine . L.toStrict)
   . filter (not . L.null)
   . map (L.dropAround $ \c -> C.isSpace c || not (C.isPrint c))
   . L.lines
   where
     parseLine = A.parseOnly $ lineP <* A.endOfInput
-    expMap = resolveExpMap expMap0
+
+
+-- | Parse definitions of the expansions.
+readExpMap
+  :: FilePath -- ^ Expansion file
+  -> IO ExpMap
+readExpMap = fmap resolveExpMap . E.readExpansions
+
+
+-- -- | Read Walenty file (verb entries only).
+-- readWalenty
+--   :: FilePath -- ^ Expansion file
+--   -> FilePath -- ^ Walenty proper
+--   -> IO [Either Verb Comment]
+-- readWalenty expPath walPath = do
+--   expMap <- E.readExpansions expPath
+--   parseWalenty expMap <$> L.readFile walPath
+-- 
+-- 
+-- -- | Parse Walenty file (verb entries only).
+-- parseWalenty :: E.ExpansionMap -> L.Text -> [Either Verb Comment]
+-- parseWalenty expMap0
+--   = map (left $ expandVerb expMap)
+--   . map (takeRight . parseLine . L.toStrict)
+--   . filter (not . L.null)
+--   . map (L.dropAround $ \c -> C.isSpace c || not (C.isPrint c))
+--   . L.lines
+--   where
+--     parseLine = A.parseOnly $ lineP <* A.endOfInput
+--     expMap = resolveExpMap expMap0
 
 
 -------------------------------------------------------------

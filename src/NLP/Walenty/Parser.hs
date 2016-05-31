@@ -46,14 +46,22 @@ commentP = A.char '%' *> (T.strip <$> A.takeText)
 
 -- | A parser for verb lexical entries.
 verbP :: Parser Verb
-verbP = Verb
+verbP = fmap checkRefl ( Verb
   <$> (fieldP  <* breakP)
+  <*> pure False
   <*> (certP   <* breakP)
   <*> (maybe_ negationP  <* breakP)
   <*> (predicativityP <* breakP)
   <*> (maybe_ aspectP <* breakP)
   <*> frameP
-  <?> "verbP"
+  <?> "verbP" )
+  where
+    -- Check whether the verb is reflexive based on its
+    -- base form (and update the form)
+    checkRefl v = if " się" `T.isSuffixOf` base v
+      then v { base = maybe "" id . T.stripSuffix " się" $ base v
+             , reflexiveV = True }
+      else v
 
 
 frameP :: Parser Frame

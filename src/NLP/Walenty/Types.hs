@@ -31,6 +31,8 @@ import           Data.Text (Text)
 data Verb = Verb
   { base          :: Text
     -- ^ Base form of the verb
+  , reflexiveV    :: Bool
+    -- ^ "się"?
   , certitude     :: CertLevel
     -- ^ Level of certitude of the entry
   , negativity    :: Maybe Negation
